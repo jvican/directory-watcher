@@ -14,16 +14,15 @@
 
 package io.methvin.watcher;
 
+import com.google.common.hash.HashCode;
+import com.sun.nio.file.ExtendedWatchEventModifier;
+import io.methvin.watcher.DirectoryChangeEvent.EventType;
+import io.methvin.watchservice.MacOSXListeningWatchService;
+import io.methvin.watchservice.WatchablePath;
+import org.slf4j.Logger;
+
 import java.io.IOException;
-import java.nio.file.FileSystems;
-import java.nio.file.FileVisitResult;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.WatchEvent;
-import java.nio.file.WatchKey;
-import java.nio.file.WatchService;
-import java.nio.file.Watchable;
+import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Collections;
 import java.util.List;
@@ -32,24 +31,11 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 
-import com.google.common.hash.HashCode;
-import com.sun.nio.file.ExtendedWatchEventModifier;
-import io.methvin.watcher.DirectoryChangeEvent.EventType;
-import io.methvin.watchservice.MacOSXListeningWatchService;
-import io.methvin.watchservice.WatchablePath;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
-import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
-import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
-import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
-import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
+import static java.nio.file.StandardWatchEventKinds.*;
 
 public class DirectoryWatcher {
-
-  static final Logger logger = LoggerFactory.getLogger(DirectoryWatcher.class);
-
+  private final Logger logger;
   private final WatchService watchService;
   private final List<Path> paths;
   private final boolean isMac;
@@ -60,18 +46,19 @@ public class DirectoryWatcher {
   // this is set to true/false depending on whether recursive watching is supported natively
   private Boolean fileTreeSupported = null;
 
-  public static DirectoryWatcher create(Path path, DirectoryChangeListener listener) throws IOException {
-    return create(Collections.singletonList(path), listener);
+  public static DirectoryWatcher create(Path path, DirectoryChangeListener listener, Logger logger) throws IOException {
+    return create(Collections.singletonList(path), listener, logger);
   }
 
-  public static DirectoryWatcher create(List<Path> paths, DirectoryChangeListener listener) throws IOException {
+  public static DirectoryWatcher create(List<Path> paths, DirectoryChangeListener listener, Logger logger) throws IOException {
     boolean isMac = System.getProperty("os.name").toLowerCase().contains("mac");
     WatchService ws = isMac ? new MacOSXListeningWatchService() : FileSystems.getDefault().newWatchService();
-    return new DirectoryWatcher(paths, listener, ws);
+    return new DirectoryWatcher(paths, listener, ws, logger);
   }
 
-  public DirectoryWatcher(List<Path> paths, DirectoryChangeListener listener, WatchService watchService) throws IOException {
+  public DirectoryWatcher(List<Path> paths, DirectoryChangeListener listener, WatchService watchService, Logger logger) throws IOException {
     this.paths = paths;
+    this.logger = logger;
     this.listener = listener;
     this.watchService = watchService;
     this.isMac = watchService instanceof MacOSXListeningWatchService;
@@ -180,7 +167,7 @@ public class DirectoryWatcher {
             listener.onEvent(new DirectoryChangeEvent(EventType.DELETE, childPath, count));
           }
         } catch (Exception e) {
-          listener.onException(e);
+          listener.onException(e, logger);
         }
       }
       boolean valid = key.reset();

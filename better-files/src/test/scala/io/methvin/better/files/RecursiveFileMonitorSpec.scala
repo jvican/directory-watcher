@@ -2,11 +2,13 @@ package io.methvin.better.files
 
 import better.files._
 import org.scalatest._
+import org.slf4j.{Logger, LoggerFactory}
 
 import scala.concurrent.ExecutionContext.Implicits.global
 import scala.concurrent.duration._
 
 class RecursiveFileMonitorSpec extends WordSpec with Matchers {
+  private final val logger = LoggerFactory.getLogger(classOf[RecursiveFileMonitorSpec])
 
   "RecursiveFileMonitor" should {
     "watch single files" in {
@@ -20,7 +22,7 @@ class RecursiveFileMonitorSpec extends WordSpec with Matchers {
         log = msg :: log
       }
       /***************************************************************************/
-      val watcher = new RecursiveFileMonitor(file) {
+      val watcher = new RecursiveFileMonitor(file, logger) {
         override def onCreate(file: File, count: Int) = output(s"$file got created $count time(s)")
         override def onModify(file: File, count: Int) = output(s"$file got modified $count time(s)")
         override def onDelete(file: File, count: Int) = output(s"$file got deleted $count time(s)")
@@ -56,7 +58,7 @@ class RecursiveFileMonitorSpec extends WordSpec with Matchers {
         log = msg :: log
       }
       /***************************************************************************/
-      val watcher = new RecursiveFileMonitor(directory) {
+      val watcher = new RecursiveFileMonitor(directory, logger) {
         override def onCreate(file: File, count: Int) = output(s"$file got created $count time(s)")
         override def onModify(file: File, count: Int) = output(s"$file got modified $count time(s)")
         override def onDelete(file: File, count: Int) = output(s"$file got deleted $count time(s)")

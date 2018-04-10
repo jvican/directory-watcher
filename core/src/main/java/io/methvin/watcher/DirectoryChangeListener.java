@@ -13,6 +13,8 @@
  */
 package io.methvin.watcher;
 
+import org.slf4j.Logger;
+
 import java.io.IOException;
 
 @FunctionalInterface
@@ -25,7 +27,7 @@ public interface DirectoryChangeListener {
   }
 
   // A handler for uncaught exceptions. This can rethrow the exception to terminate the watcher.
-  default void onException(Exception e) {
-    DirectoryWatcher.logger.debug("Got exception while watching", e);
+  default void onException(Exception e, Logger logger) {
+    logger.debug("Got exception while watching", e);
   }
 }

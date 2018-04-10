@@ -7,6 +7,8 @@ import org.apache.commons.io.FileUtils;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -21,6 +23,7 @@ import java.util.concurrent.TimeoutException;
 import static junit.framework.TestCase.assertTrue;
 
 public class DirectoryWatcherOnDiskTest {
+  static final Logger logger = LoggerFactory.getLogger(DirectoryWatcherOnDiskTest.class);
 
   private Path tmpDir;
   private EventRecorder recorder;
@@ -30,7 +33,7 @@ public class DirectoryWatcherOnDiskTest {
   public void setUp() throws IOException {
     this.tmpDir = Files.createTempDirectory(null);
     this.recorder = new EventRecorder();
-    this.watcher = DirectoryWatcher.create(this.tmpDir, this.recorder);
+    this.watcher = DirectoryWatcher.create(this.tmpDir, this.recorder, logger);
   }
 
   @After

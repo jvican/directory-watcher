@@ -1,18 +1,5 @@
 package io.methvin.watchservice;
 
-import java.io.File;
-import java.io.IOException;
-import java.nio.file.FileSystems;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.WatchEvent;
-import java.nio.file.WatchService;
-import java.util.Collections;
-import java.util.List;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.TimeUnit;
-
 import com.google.common.collect.ArrayListMultimap;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ListMultimap;
@@ -23,16 +10,22 @@ import io.methvin.watchservice.FileSystem.FileSystemAction;
 import org.codehaus.plexus.util.FileUtils;
 import org.junit.Assume;
 import org.junit.Test;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
-import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
-import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
-import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
-import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
+import java.io.File;
+import java.io.IOException;
+import java.nio.file.*;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+
+import static java.nio.file.StandardWatchEventKinds.*;
+import static org.junit.Assert.*;
 
 public class DirectoryWatcherTest {
+  static final Logger logger = LoggerFactory.getLogger(DirectoryWatcherTest.class);
 
   @Test
   public void validateOsxWatchKeyOverflow() throws Exception {
@@ -148,7 +141,7 @@ public class DirectoryWatcherTest {
     List<FileSystemAction> actions = fileSystem.actions();
 
     TestDirectoryChangeListener listener = new TestDirectoryChangeListener(directory, actions);
-    DirectoryWatcher watcher = new DirectoryWatcher(Collections.singletonList(directory), listener, watchService);
+    DirectoryWatcher watcher = new DirectoryWatcher(Collections.singletonList(directory), listener, watchService, logger);
 
     // Fire up the filesystem watcher
     CompletableFuture<Void> future = watcher.watchAsync();

@@ -5,13 +5,14 @@ import java.nio.file.{Path, WatchEvent}
 import better.files._
 import io.methvin.watcher.DirectoryChangeEvent.EventType
 import io.methvin.watcher.{DirectoryChangeEvent, DirectoryChangeListener, DirectoryWatcher}
+import org.slf4j.Logger
 
 import scala.concurrent.ExecutionContext
 
 /**
   * An implementation of the better-files `File.Monitor` interface using directory-watcher.
   */
-abstract class RecursiveFileMonitor(val root: File) extends File.Monitor {
+abstract class RecursiveFileMonitor(val root: File, logger: Logger) extends File.Monitor {
 
   protected[this] val pathToWatch: Option[Path] =
     if (root.exists) Some(if (root.isDirectory) root.path else root.parent.path) else None
@@ -42,10 +43,11 @@ abstract class RecursiveFileMonitor(val root: File) extends File.Monitor {
         }
       }
 
-      override def onException(e: Exception): Unit = {
+      override def onException(e: Exception, logger: Logger): Unit = {
         RecursiveFileMonitor.this.onException(e)
       }
-    }
+    },
+    logger
   )
 
   override def start()(implicit executionContext: ExecutionContext): Unit = {
