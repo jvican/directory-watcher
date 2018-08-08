@@ -1,5 +1,4 @@
-
-organization in ThisBuild := "io.methvin"
+organization in ThisBuild := "ch.epfl.scala"
 licenses in ThisBuild := Seq(
   "Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0.html")
 )
@@ -44,8 +43,6 @@ lazy val `directory-watcher-better-files` = (project in file("better-files"))
   )
   .dependsOn(`directory-watcher`)
 
-import sbtrelease.ReleasePlugin.autoImport.ReleaseTransformations._
-
 lazy val root = (project in file("."))
   .settings(
     PgpKeys.publishSigned := {},
@@ -55,30 +52,6 @@ lazy val root = (project in file("."))
     skip in publish := true
   )
   .aggregate(`directory-watcher`, `directory-watcher-better-files`)
-
-publishMavenStyle in ThisBuild := true
-publishTo in ThisBuild := Some(
-  if (isSnapshot.value)
-    Opts.resolver.sonatypeSnapshots
-  else
-    Opts.resolver.sonatypeStaging
-)
-
-releaseCrossBuild := true
-releaseProcess := Seq[ReleaseStep](
-  checkSnapshotDependencies,
-  inquireVersions,
-  runClean,
-  runTest,
-  setReleaseVersion,
-  commitReleaseVersion,
-  tagRelease,
-  releaseStepCommand("publishSigned"),
-  setNextVersion,
-  commitNextVersion,
-  releaseStepCommand("sonatypeReleaseAll"),
-  pushChanges
-)
 
 def commonSettings = Seq(
   fork in Test := true,
