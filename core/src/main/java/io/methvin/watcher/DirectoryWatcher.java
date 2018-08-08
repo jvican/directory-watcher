@@ -220,7 +220,7 @@ public class DirectoryWatcher {
   }
 
   // Internal method to be used by registerAll
-  private void register(Path directory, boolean useFileTreeModifier) throws IOException {
+  public void register(Path directory, boolean useFileTreeModifier) throws IOException {
     logger.debug("Registering [{}].", directory);
     Watchable watchable = isMac ? new WatchablePath(directory) : directory;
     WatchEvent.Modifier[] modifiers = useFileTreeModifier
