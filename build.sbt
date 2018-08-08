@@ -1,5 +1,5 @@
 
-organization in ThisBuild := "io.methvin"
+organization in ThisBuild := "ch.epfl.scala"
 licenses in ThisBuild := Seq(
   "Apache-2.0" -> url("https://www.apache.org/licenses/LICENSE-2.0.html")
 )
