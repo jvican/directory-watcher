@@ -1,5 +1,20 @@
 package io.methvin.watchservice;
 
+import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
+import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+
+import com.google.common.collect.ArrayListMultimap;
+import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ListMultimap;
+import io.methvin.watcher.DirectoryChangeEvent;
+import io.methvin.watcher.DirectoryChangeListener;
+import io.methvin.watcher.DirectoryWatcher;
+import io.methvin.watchservice.FileSystem.FileSystemAction;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.FileSystems;
@@ -12,25 +27,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-
-import com.google.common.collect.ArrayListMultimap;
-import com.google.common.collect.ImmutableList;
-import com.google.common.collect.ListMultimap;
-import io.methvin.watcher.DirectoryChangeEvent;
-import io.methvin.watcher.DirectoryChangeListener;
-import io.methvin.watcher.DirectoryWatcher;
-import io.methvin.watchservice.FileSystem.FileSystemAction;
 import org.codehaus.plexus.util.FileUtils;
 import org.junit.Assume;
 import org.junit.Test;
-
-import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
-import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
-import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
-import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertFalse;
-import static org.junit.Assert.assertTrue;
 
 public class DirectoryWatcherTest {
 
@@ -111,6 +110,69 @@ public class DirectoryWatcherTest {
     FileUtils.deleteDirectory(directory);
     directory.mkdirs();
     runWatcher(directory.toPath(), FileSystems.getDefault().newWatchService());
+  }
+
+  @Test
+  public void validateNonRecursiveDirectories() throws Exception {
+    File directory = new File(new File("").getAbsolutePath(), "target/directory");
+    FileUtils.deleteDirectory(directory);
+    directory.mkdirs();
+    Path directoryPath = directory.toPath();
+    WatchService watchService = FileSystems.getDefault().newWatchService();
+
+    int waitInMs = 500;
+    FileSystem fileSystem = new FileSystem(directoryPath)
+        .create("a1.txt")
+        .wait(waitInMs)
+        .create("b2.txt")
+        .wait(waitInMs)
+        .directory("foo")
+        .wait(waitInMs)
+        .create("foo/c3.txt")
+        .wait(waitInMs)
+        .delete("b2.txt")
+        .wait(waitInMs);
+/*        .update("three.txt", " 222222")
+        .wait(waitInMs)
+        .delete("one.txt")
+        .wait(waitInMs);*/
+/*        .update("one.txt", " 111111")
+        .wait(waitInMs)
+        .delete("one.txt")
+        .wait(waitInMs);*/
+/*        .directory("nonreachable")
+        .wait(waitInMs)
+        .create("nonreachable/two.txt")
+        .wait(waitInMs)
+        .update("nonreachable/two.txt", " 222222")
+        .wait(waitInMs)
+        .delete("nonreachable/two.txt")
+        .wait(waitInMs);*/
+
+    // Collect our filesystem actions
+    List<FileSystemAction> actions = fileSystem.actions();
+
+    Path targetFile = directoryPath.resolve("one.txt");
+    TestDirectoryChangeListener listener = new TestDirectoryChangeListener(directoryPath, actions);
+    DirectoryWatcher watcher = DirectoryWatcher.builder()
+        .files(Collections.singletonList(targetFile))
+        .listener(listener)
+        .watchService(watchService)
+        .fileHashing(true)
+        .build();
+
+    // Fire up the filesystem watcher
+    CompletableFuture<Void> future = watcher.watchAsync();
+    // Play our filesystem events
+    fileSystem.playActions();
+    // Wait for the future to complete which is when the right number of events are captured
+    future.get(10, TimeUnit.SECONDS);
+    ListMultimap<String, WatchEvent.Kind<?>> events = listener.events;
+    // Close the watcher
+    watcher.close();
+
+    // Let's see if everything works!
+    assertEquals("actions.size", actions.size(), events.size());
   }
 
   protected void runWatcher(Path directory, WatchService watchService) throws Exception {

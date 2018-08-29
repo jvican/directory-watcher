@@ -14,26 +14,38 @@
 
 package io.methvin.watcher;
 
+import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
+import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
+
 import com.google.common.hash.HashCode;
 import com.sun.nio.file.ExtendedWatchEventModifier;
 import io.methvin.watcher.DirectoryChangeEvent.EventType;
 import io.methvin.watchservice.MacOSXListeningWatchService;
 import io.methvin.watchservice.WatchablePath;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
-import java.nio.file.*;
+import java.nio.file.FileSystems;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.WatchEvent;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
+import java.nio.file.Watchable;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
-
-import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
-import static java.nio.file.StandardWatchEventKinds.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class DirectoryWatcher {
 
@@ -42,6 +54,7 @@ public class DirectoryWatcher {
    */
   public static final class Builder {
     private List<Path> paths = Collections.emptyList();
+    private List<Path> files = Collections.emptyList();
     private DirectoryChangeListener listener = (event -> {});
     private Logger logger = null;
     private boolean enableFileHashing = true;
@@ -54,6 +67,16 @@ public class DirectoryWatcher {
      */
     public Builder paths(List<Path> paths) {
       this.paths = paths;
+      return this;
+    }
+
+    /**
+     * Set multiple files to watch.
+     *
+     * @param files Paths to files (they cannot be directories).
+     */
+    public Builder files(List<Path> files) {
+      this.files = files;
       return this;
     }
 
@@ -105,7 +128,7 @@ public class DirectoryWatcher {
       if (logger == null) {
         staticLogger();
       }
-      return new DirectoryWatcher(paths, listener, watchService, enableFileHashing, logger);
+      return new DirectoryWatcher(paths, files, listener, watchService, enableFileHashing, logger);
     }
 
     private Builder osDefaultWatchService() throws IOException {
@@ -129,6 +152,8 @@ public class DirectoryWatcher {
 
   private final WatchService watchService;
   private final List<Path> paths;
+  private final List<Path> files;
+  private final Set<Path> nonRecursivePaths;
   private final boolean isMac;
   private final DirectoryChangeListener listener;
   private final Map<Path, HashCode> pathHashes;
@@ -138,8 +163,9 @@ public class DirectoryWatcher {
   private Boolean fileTreeSupported = null;
   private boolean enableFileHashing;
 
-  public DirectoryWatcher(List<Path> paths, DirectoryChangeListener listener, WatchService watchService, boolean enableFileHashing, Logger logger) throws IOException {
+  public DirectoryWatcher(List<Path> paths, List<Path> files, DirectoryChangeListener listener, WatchService watchService, boolean enableFileHashing, Logger logger) throws IOException {
     this.paths = paths;
+    this.files = files;
     this.listener = listener;
     this.watchService = watchService;
     this.isMac = watchService instanceof MacOSXListeningWatchService;
@@ -150,6 +176,21 @@ public class DirectoryWatcher {
 
     for (Path path : paths) {
       registerAll(path);
+    }
+
+    nonRecursivePaths = new HashSet<>();
+    for (Path file: files) {
+      Path parentFile = file.getParent();
+      if (Files.exists(parentFile)) {
+        if (!nonRecursivePaths.contains(file)) {
+          nonRecursivePaths.add(parentFile);
+          register(parentFile, false);
+        } else {
+          logger.debug("Parent file " + parentFile.toString() + " is on the watch");
+        }
+      } else {
+        logger.error("Parent file " + parentFile.toString() + " of " + file.toString() + " does not exist");
+      }
     }
   }
 
@@ -189,6 +230,7 @@ public class DirectoryWatcher {
       }
       for (WatchEvent<?> event : key.pollEvents()) {
         try {
+          logger.info("Event found !" + event.toString());
           WatchEvent.Kind<?> kind = event.kind();
           // Context for directory entry event is the file name of entry
           WatchEvent<Path> ev = PathUtils.cast(event);
@@ -208,8 +250,17 @@ public class DirectoryWatcher {
           } else if (kind == ENTRY_CREATE) {
             if (Files.isDirectory(childPath, NOFOLLOW_LINKS)) {
               if (!Boolean.TRUE.equals(fileTreeSupported)) {
-                registerAll(childPath);
+                // If the parent path is non-recursive, don't register new directory
+                Path childParentPath = childPath.getParent();
+                if (nonRecursivePaths.contains(childParentPath)) {
+                  logger.debug("Registration of " + childPath.toString() + " skipped as its parent is a non-recursive directory");
+                  // Add to set so that future parents of this directory are not registered either
+                  nonRecursivePaths.add(childParentPath);
+                } else {
+                  registerAll(childPath);
+                }
               }
+
               // Our custom Mac service sends subdirectory changes but the Windows/Linux do not.
               // Walk the file tree to make sure we send create events for any files that were created.
               if (!isMac) {
@@ -251,6 +302,7 @@ public class DirectoryWatcher {
             }
           } else if (kind == ENTRY_DELETE) {
             pathHashes.remove(childPath);
+            nonRecursivePaths.remove(childPath);
             listener.onEvent(new DirectoryChangeEvent(EventType.DELETE, childPath, count));
           }
         } catch (Exception e) {
@@ -308,7 +360,7 @@ public class DirectoryWatcher {
   }
 
   // Internal method to be used by registerAll
-  public void register(Path directory, boolean useFileTreeModifier) throws IOException {
+  void register(Path directory, boolean useFileTreeModifier) throws IOException {
     logger.debug("Registering [{}].", directory);
     Watchable watchable = isMac ? new WatchablePath(directory) : directory;
     WatchEvent.Modifier[] modifiers = useFileTreeModifier
