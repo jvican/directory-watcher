@@ -241,7 +241,7 @@ public class DirectoryWatcher {
           }
 
           Path childPath = eventPath == null ? null : keyRoots.get(key).resolve(eventPath);
-          if (shouldIgnoreEvent(childPath)) {
+          if (isMac && shouldIgnoreEvent(childPath)) {
             logger.debug("Ignored {} [{}] because one of its parent is a non-recursive directory", kind, childPath);
             continue;
           } else {
