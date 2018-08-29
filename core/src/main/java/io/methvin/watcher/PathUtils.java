@@ -13,24 +13,22 @@
  */
 package io.methvin.watcher;
 
+import com.google.common.base.Charsets;
+import com.google.common.hash.HashCode;
+import com.google.common.hash.HashFunction;
+import com.google.common.hash.Hashing;
+import com.google.common.io.Files;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.WatchEvent;
 import java.nio.file.WatchKey;
-import java.security.MessageDigest;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-
-import com.google.common.base.Charsets;
-import com.google.common.hash.HashCode;
-import com.google.common.hash.HashFunction;
-import com.google.common.hash.Hashing;
-import com.google.common.io.Files;
 
 public class PathUtils {
 
@@ -54,6 +52,10 @@ public class PathUtils {
 
   public static Map<WatchKey, Path> createKeyRootsMap() {
     return new ConcurrentHashMap<WatchKey, Path>();
+  }
+
+  public static Set<Path> createKeyRootsSet() {
+    return ConcurrentHashMap.newKeySet();
   }
 
   public static Map<Path, HashCode> createHashCodeMap(Path file) {

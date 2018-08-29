@@ -14,26 +14,37 @@
 
 package io.methvin.watcher;
 
+import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_CREATE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_DELETE;
+import static java.nio.file.StandardWatchEventKinds.ENTRY_MODIFY;
+import static java.nio.file.StandardWatchEventKinds.OVERFLOW;
+
 import com.google.common.hash.HashCode;
 import com.sun.nio.file.ExtendedWatchEventModifier;
 import io.methvin.watcher.DirectoryChangeEvent.EventType;
 import io.methvin.watchservice.MacOSXListeningWatchService;
 import io.methvin.watchservice.WatchablePath;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
-import java.nio.file.*;
+import java.nio.file.FileSystems;
+import java.nio.file.FileVisitResult;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
+import java.nio.file.WatchEvent;
+import java.nio.file.WatchKey;
+import java.nio.file.WatchService;
+import java.nio.file.Watchable;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
-
-import static java.nio.file.LinkOption.NOFOLLOW_LINKS;
-import static java.nio.file.StandardWatchEventKinds.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 public class DirectoryWatcher {
 
@@ -42,6 +53,7 @@ public class DirectoryWatcher {
    */
   public static final class Builder {
     private List<Path> paths = Collections.emptyList();
+    private List<Path> files = Collections.emptyList();
     private DirectoryChangeListener listener = (event -> {});
     private Logger logger = null;
     private boolean enableFileHashing = true;
@@ -54,6 +66,25 @@ public class DirectoryWatcher {
      */
     public Builder paths(List<Path> paths) {
       this.paths = paths;
+      return this;
+    }
+
+    /**
+     * Set multiple files to watch.
+     *
+     * Note that the watch services interface does not have the power to watch independent
+     * files. Therefore, `directory-watcher` simulates watching these independent files
+     * by watching their parent directories non-recursively.
+     *
+     * Note that file watching on a lot of independent files can cause some slowdowns.
+     * Every time there is an event in the file watcher, the logic needs to check
+     * if the change happens in a recursive path of the non-recursive directories that
+     * are being watched.
+     *
+     * @param files Paths to files (they cannot be directories).
+     */
+    public Builder files(List<Path> files) {
+      this.files = files;
       return this;
     }
 
@@ -105,7 +136,7 @@ public class DirectoryWatcher {
       if (logger == null) {
         staticLogger();
       }
-      return new DirectoryWatcher(paths, listener, watchService, enableFileHashing, logger);
+      return new DirectoryWatcher(paths, files, listener, watchService, enableFileHashing, logger);
     }
 
     private Builder osDefaultWatchService() throws IOException {
@@ -129,28 +160,38 @@ public class DirectoryWatcher {
 
   private final WatchService watchService;
   private final List<Path> paths;
+  private final List<Path> files;
   private final boolean isMac;
   private final DirectoryChangeListener listener;
   private final Map<Path, HashCode> pathHashes;
   private final Map<WatchKey, Path> keyRoots;
+  private final Set<Path> watchingPathRoots;
+  private final Set<Path> nonRecursivePathRoots;
 
   // this is set to true/false depending on whether recursive watching is supported natively
   private Boolean fileTreeSupported = null;
   private boolean enableFileHashing;
 
-  public DirectoryWatcher(List<Path> paths, DirectoryChangeListener listener, WatchService watchService, boolean enableFileHashing, Logger logger) throws IOException {
+  public DirectoryWatcher(List<Path> paths, List<Path> files, DirectoryChangeListener listener, WatchService watchService, boolean enableFileHashing, Logger logger) throws IOException {
     this.paths = paths;
+    this.files = files;
     this.listener = listener;
     this.watchService = watchService;
     this.isMac = watchService instanceof MacOSXListeningWatchService;
     this.pathHashes = PathUtils.createHashCodeMap(paths);
     this.keyRoots = PathUtils.createKeyRootsMap();
+    this.watchingPathRoots = PathUtils.createKeyRootsSet();
+    this.nonRecursivePathRoots = PathUtils.createKeyRootsSet();
     this.enableFileHashing = enableFileHashing;
     this.logger = logger;
 
+    /* Register all recursive paths after the non recursive paths to invalidate
+     * those non-recursive paths that are children of the recursive paths. */
     for (Path path : paths) {
       registerAll(path);
     }
+
+    registerRootsForFiles(files);
   }
 
   /**
@@ -198,8 +239,15 @@ public class DirectoryWatcher {
             throw new IllegalStateException(
                 "WatchService returned key [" + key + "] but it was not found in keyRoots!");
           }
+
           Path childPath = eventPath == null ? null : keyRoots.get(key).resolve(eventPath);
-          logger.debug("{} [{}]", kind, childPath);
+          if (shouldIgnoreEvent(childPath)) {
+            logger.debug("Ignored {} [{}] because one of its parent is a non-recursive directory", kind, childPath);
+            continue;
+          } else {
+            logger.debug("{} [{}]", kind, childPath);
+          }
+
           // if directory is created, and watching recursively, then register it and its sub-directories
           if (kind == OVERFLOW) {
             listener.onEvent(new DirectoryChangeEvent(EventType.OVERFLOW, childPath, count));
@@ -210,6 +258,7 @@ public class DirectoryWatcher {
               if (!Boolean.TRUE.equals(fileTreeSupported)) {
                 registerAll(childPath);
               }
+
               // Our custom Mac service sends subdirectory changes but the Windows/Linux do not.
               // Walk the file tree to make sure we send create events for any files that were created.
               if (!isMac) {
@@ -263,6 +312,7 @@ public class DirectoryWatcher {
         logger.debug("WatchKey for [{}] no longer valid; removing.", key.watchable());
         // remove the key from the keyRoots
         keyRoots.remove(key);
+        watchingPathRoots.remove(key);
         // if there are no more keys left to watch, we can break out
         if (keyRoots.isEmpty()) {
           logger.debug("No more directories left to watch; terminating watcher.");
@@ -317,6 +367,67 @@ public class DirectoryWatcher {
     WatchEvent.Kind<?>[] kinds = new WatchEvent.Kind<?>[] {ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY};
     WatchKey watchKey = watchable.register(watchService, kinds, modifiers);
     keyRoots.put(watchKey, directory);
+    watchingPathRoots.add(directory);
+  }
+
+  /**
+   * Register parents of independent files no recursive watching.
+   *
+   * If any of the parents of the independent files have already been registered or
+   * are subsumed by a path that has been registered, they are skipped.
+   *
+   * @param files The independent files that we want to watch.
+   */
+  private void registerRootsForFiles(List<Path> files) throws IOException {
+    for (Path file: files) {
+      Path parentFile = file.getParent();
+      if (!watchingPathRoots.contains(file)) {
+        if (watchingPathRoots.isEmpty()) {
+          nonRecursivePathRoots.add(parentFile);
+          register(parentFile, false);
+        } else {
+          for (Path watchRoot : watchingPathRoots) {
+            if (parentFile.startsWith(watchRoot)) {
+              logger.debug("Parent file " + parentFile.toString() + " is contained in " + watchRoot);
+            } else {
+              nonRecursivePathRoots.add(parentFile);
+              register(parentFile, false);
+            }
+          }
+        }
+      } else {
+        logger.debug("Parent file " + parentFile.toString() + " already is being watched");
+      }
+    }
+  }
+
+  /**
+   * Checks whether a path associated with an event should be processed or not.
+   *
+   * A more efficient implementation could be done by checking directly that the parent
+   * of a path is a parent of a non-recursive directory. However, this implementation is
+   * not viable as the order of the event processing is not ensured.
+   *
+   * For example, take a non-recursive directory `foo`. If a user creates `foo/bar/foo.txt`,
+   * then there's no guarantee that the creation event of the directory `foo/bar` will be
+   * processed before the creation event of `foo/bar/foo.txt`.
+   *
+   * @param path The path associated with an event of any kind.
+   * @return Whether directory watcher should process the event or not.
+   */
+  private boolean shouldIgnoreEvent(Path path) {
+    boolean ignoreEvent = false;
+    Path parentPath = path.getParent();
+    boolean isFile = !Files.isDirectory(path);
+    for (Path nonRecursivePath : nonRecursivePathRoots) {
+      // Only ignore event if parent of the path is a nested directory/file of non-recursive path
+      boolean isParentChildren = isFile && parentPath.equals(nonRecursivePath);
+      if (!isParentChildren && path.startsWith(nonRecursivePath)) {
+        ignoreEvent = true;
+        break; // We're done here, no need to check the rest of the paths
+      }
+    }
+    return ignoreEvent;
   }
 
   private void notifyCreateEvent(Path path, int count) throws IOException {
@@ -337,5 +448,4 @@ public class DirectoryWatcher {
       listener.onEvent(new DirectoryChangeEvent(EventType.CREATE, path, count));
     }
   }
-
 }
