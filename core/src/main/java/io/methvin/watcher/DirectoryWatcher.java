@@ -174,10 +174,6 @@ public class DirectoryWatcher {
     this.enableFileHashing = enableFileHashing;
     this.logger = logger;
 
-    for (Path path : paths) {
-      registerAll(path);
-    }
-
     nonRecursivePaths = new HashSet<>();
     for (Path file: files) {
       Path parentFile = file.getParent();
@@ -191,6 +187,12 @@ public class DirectoryWatcher {
       } else {
         logger.error("Parent file " + parentFile.toString() + " of " + file.toString() + " does not exist");
       }
+    }
+
+    /* Register all recursive paths after the non recursive paths to invalidate
+     * those non-recursive paths that are children of the recursive paths. */
+    for (Path path : paths) {
+      registerAll(path);
     }
   }
 
@@ -230,7 +232,6 @@ public class DirectoryWatcher {
       }
       for (WatchEvent<?> event : key.pollEvents()) {
         try {
-          logger.info("Event found !" + event.toString());
           WatchEvent.Kind<?> kind = event.kind();
           // Context for directory entry event is the file name of entry
           WatchEvent<Path> ev = PathUtils.cast(event);
@@ -242,6 +243,16 @@ public class DirectoryWatcher {
           }
           Path childPath = eventPath == null ? null : keyRoots.get(key).resolve(eventPath);
           logger.debug("{} [{}]", kind, childPath);
+
+          // If a change in a directory of a non-recursive directory happens, ignore it
+          if (Files.isDirectory(childPath, NOFOLLOW_LINKS)) {
+            Path childParentPath = childPath.getParent();
+            if (nonRecursivePaths.contains(childParentPath)) {
+              logger.debug("Registration of " + childPath.toString() + " skipped as its parent is a non-recursive directory");
+              continue;
+            }
+          }
+
           // if directory is created, and watching recursively, then register it and its sub-directories
           if (kind == OVERFLOW) {
             listener.onEvent(new DirectoryChangeEvent(EventType.OVERFLOW, childPath, count));
@@ -250,15 +261,7 @@ public class DirectoryWatcher {
           } else if (kind == ENTRY_CREATE) {
             if (Files.isDirectory(childPath, NOFOLLOW_LINKS)) {
               if (!Boolean.TRUE.equals(fileTreeSupported)) {
-                // If the parent path is non-recursive, don't register new directory
-                Path childParentPath = childPath.getParent();
-                if (nonRecursivePaths.contains(childParentPath)) {
-                  logger.debug("Registration of " + childPath.toString() + " skipped as its parent is a non-recursive directory");
-                  // Add to set so that future parents of this directory are not registered either
-                  nonRecursivePaths.add(childParentPath);
-                } else {
-                  registerAll(childPath);
-                }
+                registerAll(childPath);
               }
 
               // Our custom Mac service sends subdirectory changes but the Windows/Linux do not.
@@ -302,7 +305,6 @@ public class DirectoryWatcher {
             }
           } else if (kind == ENTRY_DELETE) {
             pathHashes.remove(childPath);
-            nonRecursivePaths.remove(childPath);
             listener.onEvent(new DirectoryChangeEvent(EventType.DELETE, childPath, count));
           }
         } catch (Exception e) {
@@ -357,10 +359,17 @@ public class DirectoryWatcher {
         }
       });
     }
+
+    // Remove those non recursive paths which are children of the recursive paths
+    nonRecursivePaths.iterator().forEachRemaining(child -> {
+      if (child.startsWith(start)) {
+        nonRecursivePaths.remove(child);
+      }
+    });
   }
 
   // Internal method to be used by registerAll
-  void register(Path directory, boolean useFileTreeModifier) throws IOException {
+  private void register(Path directory, boolean useFileTreeModifier) throws IOException {
     logger.debug("Registering [{}].", directory);
     Watchable watchable = isMac ? new WatchablePath(directory) : directory;
     WatchEvent.Modifier[] modifiers = useFileTreeModifier
